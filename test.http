@@ -1,0 +1,6 @@
+POST http://127.0.0.1:8000/generate-report
+Content-Type: application/json
+
+{
+  "trigger_reason": "testing_from_pycharm"
+}
