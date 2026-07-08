@@ -16,58 +16,99 @@ class EVTrackerState(TypedDict):
 
  #agent 1
 def stat_puller_node(state: EVTrackerState):
-    print("\n--- AGENT 1: Fetching Match Statistics & Market Odds ---")
+    print("\n--- AGENT 1: Fetching LIVE Market Odds ---")
+    api_key = os.getenv("ODDS_API_KEY")
 
-    mock_matches = [
-        {"match_id": "CS2_101", "team_a": "FaZe", "team_b": "NAVI", "faze_win_prob": 0.60},
-        {"match_id": "LOL_202", "team_a": "T1", "team_b": "Gen.G", "t1_win_prob": 0.45}
+    if not api_key:
+        print("[ERROR] ODDS_API_KEY missing from .env file!")
+        return state
+
+    # STEP 1: Reconnaissance - Ask the API what sports are actively running right now
+    sports_url = "https://api.the-odds-api.com/v4/sports"
+    sports_response = requests.get(sports_url, params={"apiKey": api_key})
+
+    if sports_response.status_code != 200:
+        print(f"[ERROR] Could not fetch sports list: {sports_response.text}")
+        return {"upcoming_matches": [], "bookmaker_odds": []}
+
+    all_sports = sports_response.json()
+
+    # Filter the massive list down to just active Esports
+    active_esports = [
+        s for s in all_sports
+        if "esports" in s.get("group", "").lower() or "esports" in s.get("key", "").lower()
     ]
 
-    mock_odds = [
-        {"match_id": "CS2_101", "bookie": "Pinnacle", "team_a_odds": 2.10},  # Implied prob: 1/2.10 = 47.6%
-        {"match_id": "LOL_202", "bookie": "Bet365", "team_a_odds": 1.85}  # Implied prob: 1/1.85 = 54.0%
-    ]
+    if not active_esports:
+        print("[AGENT 1] No active esports tournaments found on the board today.")
+        return {"upcoming_matches": [], "bookmaker_odds": []}
 
-    # We update the state dictionary with our raw data arrays
-    return {"upcoming_matches": mock_matches, "bookmaker_odds": mock_odds}
+    # Grab the exact key for the first active tournament it finds
+    target_sport_key = active_esports[0]["key"]
+    print(f"[AGENT 1] Discovered active tournament: '{target_sport_key}'. Locking on...")
+
+    # STEP 2: Execution - Fetch the odds specifically for that active tournament
+    odds_url = f"https://api.the-odds-api.com/v4/sports/{target_sport_key}/odds/"
+    params = {
+        "apiKey": api_key,
+        "regions": "eu,uk",  # Widened the net to catch more bookies
+        "markets": "h2h",
+        "bookmakers": "pinnacle,bet365"
+    }
+
+    odds_response = requests.get(odds_url, params=params)
+
+    if odds_response.status_code != 200:
+        print(f"[ERROR] API Request Failed: {odds_response.text}")
+        return {"upcoming_matches": [], "bookmaker_odds": []}
+
+    raw_data = odds_response.json()
+    print(f"[AGENT 1] Successfully pulled {len(raw_data)} live matches.")
+
+    return {"upcoming_matches": raw_data, "bookmaker_odds": []}
+
 
 #agent 2
 def risk_modeler_node(state: EVTrackerState):
     print("\n--- AGENT 2: Executing Expected Value (+EV) Algorithms ---")
     matches = state.get("upcoming_matches", [])
-    odds = state.get("bookmaker_odds", [])
 
     ev_bets = []
 
-    # Iterating through matches and bookie listings to calculate structural anomalies
     for match in matches:
-        for odd in odds:
-            if match["match_id"] == odd["match_id"]:
-                # Calculate what probability the bookie is predicting
-                implied_prob = 1 / odd["team_a_odds"]
+        team_a = match.get("home_team")
+        team_b = match.get("away_team")
 
-                # Dynamic matching based on team tags
-                if "faze_win_prob" in match:
-                    real_prob = match["faze_win_prob"]
-                    team_name = match["team_a"]
-                elif "t1_win_prob" in match:
-                    real_prob = match["t1_win_prob"]
-                    team_name = match["team_a"]
-                else:
-                    continue
+        pinnacle_odds = None
+        bet365_odds = None
 
-                # Fundamental Quant Target: Real Probability > Implied Probability = Positive Value
-                if real_prob > implied_prob:
-                    edge_percentage = (real_prob - implied_prob) * 100
+        for bookmaker in match.get("bookmakers", []):
+            if bookmaker["key"] == "pinnacle":
+
+                pinnacle_odds = bookmaker["markets"][0]["outcomes"][0]["price"]
+            elif bookmaker["key"] == "bet365":
+                bet365_odds = bookmaker["markets"][0]["outcomes"][0]["price"]
+
+
+        if pinnacle_odds and bet365_odds:
+            true_prob = 1 / pinnacle_odds
+            implied_prob = 1 / bet365_odds
+
+
+            if true_prob > implied_prob:
+                edge_percentage = (true_prob - implied_prob) * 100
+
+
+                if edge_percentage > 1.0:
                     ev_bets.append({
-                        "match_id": match["match_id"],
-                        "team": team_name,
-                        "odds": odd["team_a_odds"],
+                        "match_id": f"{team_a} vs {team_b}",
+                        "team": team_a,
+                        "odds": bet365_odds,
                         "edge_percent": round(edge_percentage, 2),
-                        "recommendation": "PLAY"
+                        "recommendation": "PLAY (Bet365 Misprice)"
                     })
 
-    print(f"[Quant System Alert] Identified {len(ev_bets)} mispriced market opportunities.")
+    print(f"[Quant System Alert] Identified {len(ev_bets)} live mispriced opportunities.")
     return {"ev_opportunities": ev_bets}
 
 # agent 3
