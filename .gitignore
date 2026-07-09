@@ -1,10 +1,12 @@
 # Environments
-venv/
-env/
-
-# Secrets
 .env
-
-# Python Cache
+.venv/
+env/
 __pycache__/
-*.pyc
+
+# n8n local data
+n8n_data/
+
+# IDE files
+.idea/
+.vscode/

@@ -36,7 +36,7 @@ def stat_puller_node(state: EVTrackerState):
     # Filter the massive list down to just active Esports
     active_esports = [
         s for s in all_sports
-        if "esports" in s.get("group", "").lower() or "esports" in s.get("key", "").lower()
+        if "fifa" in s.get("group", "").lower() or "fifa" in s.get("key", "").lower()
     ]
 
     if not active_esports:
